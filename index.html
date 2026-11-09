@@ -492,13 +492,13 @@ nav button svg{width:22px;height:22px}
   <p class="hint" style="margin-top:0">Twoje grupy w planie zajęć. Kliknij ponownie, żeby odznaczyć i zobaczyć wszystkie.</p>
   <div class="group" id="grp"></div>
   <div class="group"><button type="button" class="ghost" id="btn-notif">Włącz powiadomienia</button><button type="button" class="ghost" id="btn-clear-ex">Usuń zadania przykładowe</button></div>
-  <p class="hint">Synchronizacja online: dane zapisują się w prywatnym Gistcie na Twoim GitHubie i są wspólne dla wszystkich urządzeń. Utwórz token (github.com/settings/tokens, „Tokens (classic)”) z jedynym uprawnieniem <b>gist</b> i wklej go poniżej. Na kolejnym urządzeniu wklej ten sam token oraz ID Gista.</p>
+  <p class="hint">Synchronizacja online: dane zapisują się w chmurze (Firebase) i są wspólne dla wszystkich urządzeń. Najłatwiej: na jednym urządzeniu skonfiguruj, skopiuj link i otwórz go na drugim. Nic więcej nie trzeba wpisywać.</p>
   <div class="group">
-    <div><input type="password" id="s-token" placeholder="Token GitHub (uprawnienie gist)" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
-    <div><input type="text" id="s-gid" placeholder="ID Gista (puste = utworzy nowy)" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
+    <div><input type="text" id="s-url" placeholder="Adres bazy Firebase (https://…firebasedatabase.app)" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
+    <div><input type="text" id="s-code" placeholder="Tajny kod (pusty = wygeneruje)" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
   </div>
   <p class="hint" id="s-status" style="margin-top:0">Synchronizacja wyłączona.</p>
-  <div class="group"><button type="button" class="ghost" id="s-connect">Połącz i synchronizuj</button><button type="button" class="ghost" id="s-now" hidden>Synchronizuj teraz</button><button type="button" class="danger" id="s-off" hidden>Wyłącz synchronizację</button></div>
+  <div class="group"><button type="button" class="ghost" id="s-connect">Połącz i synchronizuj</button><button type="button" class="ghost" id="s-now" hidden>Synchronizuj teraz</button><button type="button" class="ghost" id="s-link" hidden>Skopiuj link dla innego urządzenia</button><button type="button" class="danger" id="s-off" hidden>Wyłącz synchronizację</button></div>
   <p class="hint">Kopia zapasowa: skopiuj tekst poniżej i zapisz w notatkach. Gdy telefon wyczyści dane strony, wklej go tutaj i wczytaj.</p>
   <div class="group"><textarea id="backup" aria-label="Kopia zapasowa" spellcheck="false"></textarea></div>
   <div class="group"><button type="button" class="ghost" id="btn-copy">Skopiuj kopię</button><button type="button" class="ghost" id="btn-load">Wczytaj z pola</button></div>
@@ -1127,7 +1127,7 @@ $('#btn-del').addEventListener('click',function(){
 });
 $('#open-settings').addEventListener('click',function(){
   $('#backup').value=JSON.stringify(state);
-  $('#s-token').value=sync.token;$('#s-gid').value=sync.gid;syncMsg();
+  $('#s-url').value=sync.url;$('#s-code').value=sync.code;syncMsg();
   var ns=notifStatus();$('#btn-notif').hidden=!ns.b;
   renderGroups();
   openSheet($('#settings'));
@@ -1173,70 +1173,83 @@ document.addEventListener('visibilitychange',function(){if(!document.hidden){ren
 setInterval(updateTimer,1000);
 setInterval(renderNextCard,30000);
 
-/* synchronizacja online (prywatny Gist) */
-var SKEY='moje-sprawy-sync',SFILE='priorytet.json';
-var sync={token:'',gid:'',last:0,err:''},syncBusy=false,syncTimer=0;
-function syncLoad(){try{var o=JSON.parse(localStorage.getItem(SKEY)||'null');if(o&&o.token)sync={token:o.token,gid:o.gid||'',last:o.last||0,err:''}}catch(e){}}
-function syncStore(){try{localStorage.setItem(SKEY,JSON.stringify({token:sync.token,gid:sync.gid,last:sync.last}))}catch(e){}}
-function gh(method,path,body){
-  return fetch('https://api.github.com'+path,{method:method,headers:{'Authorization':'Bearer '+sync.token,'Accept':'application/vnd.github+json','Content-Type':'application/json'},body:body?JSON.stringify(body):undefined}).then(function(r){
+/* synchronizacja online (Firebase Realtime Database, REST) */
+var SKEY='moje-sprawy-sync';
+var sync={url:'',code:'',last:0,err:''},syncBusy=false,syncTimer=0;
+function syncLoad(){
+  try{var o=JSON.parse(localStorage.getItem(SKEY)||'null');if(o&&o.url&&o.code)sync={url:o.url,code:o.code,last:o.last||0,err:''}}catch(e){}
+  /* link konfiguracyjny: ...#sync=<base64> */
+  var m=/[#&]sync=([^&]+)/.exec(location.hash||'');
+  if(m){
+    try{var c=JSON.parse(decodeURIComponent(escape(atob(decodeURIComponent(m[1])))));
+      if(c&&c.u&&c.c){sync={url:c.u,code:c.c,last:0,err:''};syncStore();sync.adopt=true}}catch(e){}
+    try{history.replaceState(null,'',location.pathname+location.search)}catch(e){}
+  }
+}
+function syncStore(){try{localStorage.setItem(SKEY,JSON.stringify({url:sync.url,code:sync.code,last:sync.last}))}catch(e){}}
+function cleanUrl(u){return u.trim().replace(/\/+$/,'')}
+function endpoint(){return cleanUrl(sync.url)+'/priorytet/'+encodeURIComponent(sync.code)+'.json'}
+function fb(method,body){
+  return fetch(endpoint(),{method:method,headers:body?{'Content-Type':'application/json'}:undefined,body:body}).then(function(r){
     if(!r.ok){var e=new Error('HTTP '+r.status);e.status=r.status;throw e}
     return r.json();
   });
 }
-function readRemote(g){
-  var f=g.files&&g.files[SFILE];
-  if(!f)return Promise.resolve(null);
-  var p=f.truncated?fetch(f.raw_url).then(function(r){return r.text()}):Promise.resolve(f.content);
-  return p.then(function(t){var s=JSON.parse(t);return s&&Array.isArray(s.items)?s:null});
-}
-function pushRemote(){
-  var files={};files[SFILE]={content:JSON.stringify(state)};
-  return gh('PATCH','/gists/'+sync.gid,{files:files});
+function newCode(){
+  var a=new Uint8Array(16),o='';
+  try{crypto.getRandomValues(a)}catch(e){for(var i=0;i<16;i++)a[i]=Math.random()*256}
+  for(var j=0;j<16;j++)o+=('0'+a[j].toString(16)).slice(-2);
+  return o;
 }
 function syncMsg(){
   var el=$('#s-status');if(!el)return;
-  var on=!!sync.token;
-  $('#s-now').hidden=!on;$('#s-off').hidden=!on;$('#s-connect').hidden=on;
+  var on=!!sync.url;
+  $('#s-now').hidden=!on;$('#s-off').hidden=!on;$('#s-link').hidden=!on;$('#s-connect').hidden=on;
   if(!on){el.textContent='Synchronizacja wyłączona.';return}
   var t=sync.last?new Date(sync.last).toLocaleTimeString('pl-PL',{hour:'2-digit',minute:'2-digit'}):'';
   el.textContent=sync.err?('Błąd synchronizacji: '+sync.err):('Połączono. Ostatnia synchronizacja: '+(t||'jeszcze nie było')+'.');
 }
 function syncErr(e){
-  sync.err=e&&e.status===401?'zły lub wygasły token':e&&e.status===404?'nie znaleziono Gista (sprawdź ID i uprawnienia tokenu)':(!navigator.onLine||e instanceof TypeError)?'brak połączenia (zapisano lokalnie)':'nie udało się ('+(e&&e.message||'?')+')';
+  sync.err=e&&(e.status===401||e.status===403)?'baza odrzuciła dostęp (sprawdź reguły w Firebase)':e&&e.status===404?'nie znaleziono bazy (sprawdź adres)':(!navigator.onLine||e instanceof TypeError)?'brak połączenia (zapisano lokalnie)':'nie udało się ('+(e&&e.message||'?')+')';
   syncMsg();
 }
-/* adoptRemote=true: dane z chmury zawsze wygrywają (pierwsze łączenie z istniejącym Gistem) */
+/* adoptRemote=true: dane z chmury wygrywają (pierwsze łączenie z istniejącym kodem) */
 function syncNow(adoptRemote){
-  if(!sync.token||syncBusy)return Promise.resolve();
+  if(!sync.url||syncBusy)return Promise.resolve();
+  if(sync.adopt){adoptRemote=true;sync.adopt=false}
   syncBusy=true;
-  var job;
-  if(!sync.gid){
-    var files={};files[SFILE]={content:JSON.stringify(state)};
-    job=gh('POST','/gists',{description:'Priorytet – dane aplikacji',public:false,files:files}).then(function(g){sync.gid=g.id;syncStore();$('#s-gid').value=g.id});
-  }else{
-    job=gh('GET','/gists/'+sync.gid).then(readRemote).then(function(rs){
-      var lt=state.ts||0,rt=rs&&rs.ts||0;
-      if(rs&&(adoptRemote||rt>lt)){state=rs;norm();persist();render();checkDue()}
-      else if(!rs||lt>rt)return pushRemote();
-    });
-  }
-  return job.then(function(){sync.last=Date.now();sync.err='';syncStore();syncMsg()},syncErr).then(function(){syncBusy=false});
+  return fb('GET').then(function(rs){
+    if(rs&&!Array.isArray(rs.items))rs=null;
+    var lt=state.ts||0,rt=rs&&rs.ts||0;
+    if(rs&&(adoptRemote||rt>lt)){state=rs;norm();persist();render();checkDue()}
+    else if(!rs||lt>rt)return fb('PUT',JSON.stringify(state));
+  }).then(function(){sync.last=Date.now();sync.err='';syncStore();syncMsg()},syncErr).then(function(){syncBusy=false});
 }
 function syncSoon(){
-  if(!sync.token)return;
+  if(!sync.url)return;
   clearTimeout(syncTimer);syncTimer=setTimeout(function(){syncNow()},2000);
 }
+function syncLink(){
+  var c=btoa(unescape(encodeURIComponent(JSON.stringify({u:cleanUrl(sync.url),c:sync.code}))));
+  return location.href.split('#')[0]+'#sync='+encodeURIComponent(c);
+}
 $('#s-connect').addEventListener('click',function(){
-  var tk=$('#s-token').value.trim(),gid=$('#s-gid').value.trim();
-  if(!tk){toast('Brak tokenu','Wklej token GitHub z uprawnieniem gist.');return}
-  sync={token:tk,gid:gid,last:0,err:''};syncStore();
-  syncNow(!!gid).then(function(){if(!sync.err)toast('Połączono',gid?'Wczytano dane z chmury.':'Utworzono Gist. Skopiuj jego ID na inne urządzenia.')});
+  var u=$('#s-url').value.trim(),c=$('#s-code').value.trim();
+  if(!/^https:\/\/[^\s/]+/.test(u)){toast('Zły adres','Wklej adres bazy Firebase zaczynający się od https://');return}
+  var fresh=!c;if(fresh)c=newCode();
+  sync={url:u,code:c,last:0,err:''};syncStore();$('#s-code').value=c;
+  syncNow(!fresh).then(function(){if(!sync.err)toast('Połączono',fresh?'Skopiuj link i otwórz go na drugim urządzeniu.':'Wczytano dane z chmury.')});
 });
 $('#s-now').addEventListener('click',function(){syncNow().then(function(){if(!sync.err)toast('Zsynchronizowano','Dane są aktualne.')})});
+$('#s-link').addEventListener('click',function(){
+  var l=syncLink(),ok=false;
+  try{if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(l);ok=true}}catch(e){}
+  if(!ok){var ta=$('#backup');ta.value=l;try{ta.focus();ta.select();ta.setSelectionRange(0,l.length);ok=document.execCommand('copy')}catch(e){}}
+  toast(ok?'Skopiowano link':'Skopiuj ręcznie',ok?'Otwórz go na drugim urządzeniu. Traktuj jak hasło.':'Link jest w polu kopii zapasowej niżej.');
+});
 $('#s-off').addEventListener('click',function(){
-  sync={token:'',gid:'',last:0,err:''};try{localStorage.removeItem(SKEY)}catch(e){}
-  $('#s-token').value='';$('#s-gid').value='';syncMsg();toast('Wyłączono','Dane zostają na tym urządzeniu i w Gistcie.');
+  sync={url:'',code:'',last:0,err:''};try{localStorage.removeItem(SKEY)}catch(e){}
+  $('#s-url').value='';$('#s-code').value='';syncMsg();toast('Wyłączono','Dane zostają na tym urządzeniu i w chmurze.');
 });
 document.addEventListener('visibilitychange',function(){if(!document.hidden)syncNow()});
 window.addEventListener('online',function(){syncNow()});

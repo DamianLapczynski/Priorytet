@@ -265,6 +265,16 @@ nav button[aria-current="page"] svg{animation:popi .4s ease}
 .ring .pg{transition:stroke-dashoffset 1s linear}
 .tmtxt{position:absolute;inset:0;display:grid;place-items:center;font-family:var(--display);font-style:italic;font-weight:700;font-size:46px;font-variant-numeric:tabular-nums}
 .fcard .tmend{text-align:center;margin:0 0 14px}
+.pcard{background:var(--card);border-radius:16px;padding:12px 14px;box-shadow:var(--shadow);margin:-4px 0 14px}
+.prow+.prow{margin-top:10px}
+.ptop{display:flex;justify-content:space-between;align-items:baseline;gap:10px;font-size:14px;font-weight:600;margin-bottom:6px}
+.ptop em{font-style:normal;font-weight:500;color:var(--ink2);font-size:13px;font-variant-numeric:tabular-nums;text-align:right}
+.pbar{display:flex;gap:4px;height:10px}
+.pseg{position:relative;flex:1;min-width:6px;border-radius:99px;background:var(--accent-soft);overflow:hidden}
+.pseg i{position:absolute;left:0;top:0;bottom:0;border-radius:99px;background:linear-gradient(90deg,var(--accent),var(--pink))}
+.pseg.on{box-shadow:0 0 0 1.5px var(--gold)}
+.psem .pseg{height:6px;align-self:center}
+.pnone{margin:0;color:var(--ink2);font-size:14px}
 .encard{background:var(--card);border-radius:16px;padding:12px 14px;box-shadow:var(--shadow);margin-bottom:20px}
 .entop{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:16px}
 .enote{margin:8px 0 0;color:var(--ink2);font-size:14px}
@@ -322,6 +332,7 @@ nav button svg{width:22px;height:22px}
 .fstep{padding:6px 0}
 .fstep em{margin-left:auto;color:var(--ink2);font-style:normal;font-size:13px}
 .sdone{margin:8px 0 0!important}
+.pcard{padding:8px 12px;margin:0 0 8px}
 .encard{padding:6px 12px;margin-bottom:8px}
 .encard .enote{display:none}
 .entop{font-size:15px}
@@ -936,6 +947,26 @@ function nextHtml(){
   else when=fmtDate(n.date).toLowerCase()+', '+n.c.s;
   return '<button class="ncard" data-act="goplan"><small>'+(n.on?'Trwa teraz':'Następne zajęcia')+'</small><b>'+esc(n.c.name)+'</b><div class="nrow"><span class="nwhen">'+when+'</span><span class="chip">'+n.c.s+'–'+n.c.e+'</span><span class="chip">'+esc(n.c.room)+'</span></div></button>';
 }
+function hm(t){var a=t.split(':');return (+a[0])*60+(+a[1])}
+function progHtml(){
+  var d=today(),now=new Date(),nm=now.getHours()*60+now.getMinutes()+now.getSeconds()/60;
+  var l=classesOn(d).filter(function(c){return !c.x}),h='<div class="pcard" aria-label="Postęp zajęć">';
+  if(l.length){
+    var done=0,segs=l.map(function(c){
+      var a=hm(c.s),b=hm(c.e),f=nm>=b?1:nm<=a?0:(nm-a)/(b-a);
+      if(f>=1)done++;
+      return '<span class="pseg'+(f>0&&f<1?' on':'')+'" style="flex:'+Math.max(b-a,15)+'" title="'+esc(c.s+'–'+c.e+' '+c.name)+'"><i style="width:'+Math.round(f*100)+'%"></i></span>';
+    }).join('');
+    var last=l[l.length-1].e,info=done===l.length?'wszystkie za Tobą':done+' z '+l.length+' · koniec '+last;
+    h+='<div class="prow" role="img" aria-label="Zajęcia dziś: '+done+' z '+l.length+' zakończone"><div class="ptop"><span>Zajęcia dziś</span><em>'+info+'</em></div><div class="pbar">'+segs+'</div></div>';
+  }else h+='<p class="pnone">Dziś bez zajęć.</p>';
+  var A=new Date(SEM_A+'T00:00:00'),B=new Date(SEM_B+'T23:59:59');
+  if(now>=A&&now<=B){
+    var f=(now-A)/(B-A),wk=Math.floor((now-A)/6048e5)+1,wks=Math.ceil((B-A)/6048e5);
+    h+='<div class="prow psem"><div class="ptop"><span>Semestr</span><em>tydz. '+wk+' z '+wks+' · '+Math.round(f*100)+'%</em></div><div class="pbar"><span class="pseg"><i style="width:'+(f*100).toFixed(1)+'%"></i></span></div></div>';
+  }
+  return h+'</div>';
+}
 function energyNow(){var e=state.energyToday;return e&&e.d===today()?e.l:''}
 function suggestList(){
   var rank={q1:0,q2:1,q3:2,q4:3},en=energyNow();
@@ -984,12 +1015,12 @@ function dumpHtml(){
 }
 function renderNow(){
   var old=$('#dump-in'),val=old?old.value:'',foc=old&&document.activeElement===old;
-  $('#v-now').innerHTML='<div id="n-next">'+nextHtml()+'</div><div id="n-focus">'+focusHtml()+'</div>'+energyHtml()+'<div class="orn m" aria-hidden="true"></div>'+dumpHtml();
+  $('#v-now').innerHTML='<div id="n-next">'+nextHtml()+progHtml()+'</div><div id="n-focus">'+focusHtml()+'</div>'+energyHtml()+'<div class="orn m" aria-hidden="true"></div>'+dumpHtml();
   var ni=$('#dump-in');
   if(ni&&val){ni.value=val;if(foc)ni.focus()}
   updateTimer();
 }
-function renderNextCard(){var e=$('#n-next');if(e)e.innerHTML=nextHtml()}
+function renderNextCard(){var e=$('#n-next');if(e)e.innerHTML=nextHtml()+progHtml()}
 function updateTimer(){
   var t=state.timer;if(!t)return;
   var rem=t.end-Date.now();
